@@ -1,54 +1,54 @@
 # market-condition-simulator
 
-Middleware de backtest que inyecta **fricciones realistas de mercado**: latencia de red y slippage por falta de liquidez en el libro de órdenes. Séptimo módulo del ecosistema [quant-core-infra](https://github.com/juanmmm21/quant-core-infra).
+Backtest middleware that injects **realistic market frictions**: network latency and slippage from order-book liquidity constraints. Seventh module of the [quant-core-infra](https://github.com/juanmmm21/quant-core-infra) ecosystem.
 
-Repositorio: [github.com/juanmmm21/market-condition-simulator](https://github.com/juanmmm21/market-condition-simulator)
-
----
-
-## Qué es y qué problema resuelve
-
-`event-driven-backtester` ejecuta órdenes al precio de mercado instantáneamente. En la realidad:
-
-- Tu orden tarda **milisegundos** en llegar al exchange (latencia de red)
-- El precio se mueve mientras esperas
-- Si tu orden es grande respecto al libro, **comes niveles** y pagas slippage
-
-Ignorar esto infla artificialmente el rendimiento de las estrategias. Este módulo modela esas fricciones de forma explícita y configurable.
+Repository: [github.com/juanmmm21/market-condition-simulator](https://github.com/juanmmm21/market-condition-simulator)
 
 ---
 
-## Rol en quant-core-infra
+## What it is and what problem it solves
+
+`event-driven-backtester` executes orders at market price instantly. In reality:
+
+- Your order takes **milliseconds** to reach the exchange (network latency)
+- The price moves while you wait
+- If your order is large relative to the book, you **eat through levels** and pay slippage
+
+Ignoring this artificially inflates strategy performance. This module models those frictions explicitly and configurably.
+
+---
+
+## Role in quant-core-infra
 
 ```text
-event-driven-backtester ──► órdenes pendientes ──► market-condition-simulator
-order-book-reconstructor ──► métricas de libro ──┘           │
+event-driven-backtester ──► pending orders ──► market-condition-simulator
+order-book-reconstructor ──► book metrics ──┘           │
                                                              ▼
-                                                   precios de ejecución realistas
+                                                   realistic execution prices
                                                              │
                                                    quant-metrics-calculator
 ```
 
-Se sitúa **entre** el backtester ideal y la evaluación de rendimiento real.
+It sits **between** the ideal backtester and real performance evaluation.
 
 ---
 
-## Objetivo
+## Purpose
 
-Demuestra:
+Demonstrates:
 
-- Modelado explícito de latencia de ejecución
-- Slippage proporcional a tamaño de orden vs profundidad del libro
-- Precios y comisiones con precisión `Decimal`
-- Pipelines JSONL compatibles con ticks, órdenes y libros
+- Explicit execution latency modeling
+- Slippage proportional to order size vs. book depth
+- Prices and commissions with `Decimal` precision
+- JSONL pipelines compatible with ticks, orders, and books
 
 ---
 
-## Modelo de fricción
+## Friction model
 
-### Latencia
+### Latency
 
-Una orden enviada en `T₀` no es elegible para ejecución hasta `T₀ + latency_ms`. La ejecución ocurre en el **primer tick** posterior a ese instante.
+An order submitted at `T₀` is not eligible for execution until `T₀ + latency_ms`. Execution occurs on the **first tick** after that instant.
 
 ### Slippage
 
@@ -56,15 +56,15 @@ Una orden enviada en `T₀` no es elegible para ejecución hasta `T₀ + latency
 slippage_bps = base_slippage_bps + impact_factor × (quantity / depth) × 10000
 ```
 
-| Lado | Precio de ejecución |
+| Side | Execution price |
 |------|---------------------|
 | **Buy** | `reference_price × (1 + slippage_bps/10000)` |
 | **Sell** | `reference_price × (1 - slippage_bps/10000)` |
 
-- `depth` = `ask_depth` para compras, `bid_depth` para ventas
-- Sin libro disponible → solo aplica slippage base
+- `depth` = `ask_depth` for buys, `bid_depth` for sells
+- No book available → only base slippage applies
 
-### Comisión
+### Commission
 
 ```
 commission = execution_price × quantity × commission_rate
@@ -72,67 +72,67 @@ commission = execution_price × quantity × commission_rate
 
 ---
 
-## Cómo funciona
+## How it works
 
-1. **Órdenes** se cargan desde JSONL y entran en cola pendiente con `execute_after = submitted_at + latency`.
-2. **Por cada tick:** se procesan órdenes cuya ventana de latencia ya expiró.
-3. **Precio de referencia:** precio del tick en el momento de ejecución (no el de envío).
-4. **Slippage:** se calcula con el libro vigente en ese instante.
-5. **Resultado:** `ExecutionResult` con precio final, slippage en bps, latencia real y comisión.
+1. **Orders** are loaded from JSONL and enter a pending queue with `execute_after = submitted_at + latency`.
+2. **Per tick:** orders whose latency window has already expired are processed.
+3. **Reference price:** the tick price at the moment of execution (not at submission).
+4. **Slippage:** computed using the book in effect at that instant.
+5. **Result:** `ExecutionResult` with final price, slippage in bps, actual latency, and commission.
 
 ---
 
-## Arquitectura
+## Architecture
 
 ```text
 Orders JSONL
         │
         ▼
-MarketConditionSimulator (cola pendiente)
+MarketConditionSimulator (pending queue)
         │
 Ticks JSONL + Book JSONL
         │
         ▼
-ExecutionResult (precio, slippage, latencia, comisión)
+ExecutionResult (price, slippage, latency, commission)
 ```
 
-### Componentes
+### Components
 
-| Módulo | Responsabilidad |
+| Module | Responsibility |
 |--------|----------------|
-| `latency.py` | Scheduling de timestamp de ejecución |
-| `slippage.py` | Modelo de impacto en basis points |
-| `simulator.py` | Cola pendiente y orquestación de fills |
-| `ingest.py` | Parsing JSONL |
-| `pipeline.py` | Run end-to-end |
+| `latency.py` | Execution timestamp scheduling |
+| `slippage.py` | Impact model in basis points |
+| `simulator.py` | Pending queue and fill orchestration |
+| `ingest.py` | JSONL parsing |
+| `pipeline.py` | End-to-end run |
 
-### Decisiones técnicas
+### Technical decisions
 
-- **Decimal** en precios, cantidades y comisiones
-- **Ejecución driven por ticks** — sin ticks no hay fill
-- **Snapshot único de libro** replicable en toda la serie
-- **Orden estable** en cola pendiente por `execute_after`
+- **Decimal** for prices, quantities, and commissions
+- **Tick-driven execution** — no ticks, no fill
+- **Single book snapshot** replicable across the whole series
+- **Stable ordering** in the pending queue by `execute_after`
 
 ---
 
-## Configuración: `MarketConditionConfig`
+## Configuration: `MarketConditionConfig`
 
-| Parámetro | Default | Descripción |
+| Parameter | Default | Description |
 |-----------|---------|-------------|
-| `latency_ms` | `50` | Retardo de red simulado |
-| `base_slippage_bps` | `2` | Slippage mínimo en puntos básicos |
-| `impact_factor` | `0.5` | Sensibilidad al ratio cantidad/profundidad |
-| `commission_rate` | `0.001` | Comisión sobre notional ejecutado |
+| `latency_ms` | `50` | Simulated network delay |
+| `base_slippage_bps` | `2` | Minimum slippage in basis points |
+| `impact_factor` | `0.5` | Sensitivity to quantity/depth ratio |
+| `commission_rate` | `0.001` | Commission on executed notional |
 
 ---
 
-## Requisitos
+## Requirements
 
 - Python **3.11+**
 
 ---
 
-## Instalación
+## Installation
 
 ```bash
 cd market-condition-simulator
@@ -143,7 +143,7 @@ pip install -e ".[dev]"
 
 ---
 
-## Uso CLI
+## CLI usage
 
 ```bash
 market-condition-simulator run \
@@ -157,7 +157,7 @@ market-condition-simulator run \
   --output executions.json
 ```
 
-### Salida esperada (extracto)
+### Expected output (excerpt)
 
 ```json
 {
@@ -173,9 +173,9 @@ market-condition-simulator run \
 
 ---
 
-## Formatos JSONL
+## JSONL formats
 
-### Orden de ejecución
+### Execution order
 
 ```json
 {
@@ -187,7 +187,7 @@ market-condition-simulator run \
 }
 ```
 
-### Tick de mercado
+### Market tick
 
 ```json
 {
@@ -197,7 +197,7 @@ market-condition-simulator run \
 }
 ```
 
-### Liquidez del libro
+### Book liquidity
 
 ```json
 {
@@ -212,7 +212,7 @@ market-condition-simulator run \
 
 ---
 
-## Uso programático
+## Programmatic usage
 
 ```python
 from datetime import UTC, datetime
@@ -227,7 +227,7 @@ from market_condition_simulator import (
     run_simulation_pipeline,
 )
 
-# Pipeline desde archivos
+# Pipeline from files
 results = run_simulation_pipeline(
     orders_path="orders.jsonl",
     ticks_path="ticks.jsonl",
@@ -236,7 +236,7 @@ results = run_simulation_pipeline(
     books_path="book.jsonl",
 )
 
-# Simulador manual
+# Manual simulator
 sim = MarketConditionSimulator(MarketConditionConfig())
 sim.submit_order(
     ExecutionOrder(
@@ -256,7 +256,7 @@ fills = sim.process_tick(
 
 ---
 
-## Desarrollo
+## Development
 
 ```bash
 pytest -q
@@ -268,12 +268,12 @@ mypy src
 
 ## Roadmap
 
-- [ ] Distribución estocástica de latencia (no solo fija)
-- [ ] Modelo de slippage por niveles del libro (walk the book)
-- [ ] Integración como plugin dentro de `event-driven-backtester`
+- [ ] Stochastic latency distribution (not just fixed)
+- [ ] Order-book-level slippage model (walk the book)
+- [ ] Integration as a plugin inside `event-driven-backtester`
 
 ---
 
-## Licencia
+## License
 
 MIT
