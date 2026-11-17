@@ -126,6 +126,40 @@ ExecutionResult (price, slippage, latency, commission)
 
 ---
 
+## Queue-position model for limit orders
+
+Latency and slippage describe **taking** liquidity. A passive limit order **provides** it, and
+whether it fills depends on how much volume is queued ahead of it. `queue.py` simulates that on a
+real L2 stream (the validated output of `order-book-reconstructor replay`):
+
+| Event | Effect on a resting order at price *p* |
+|-------|------------------------------------------|
+| order becomes active (`submitted_at + latency`) | joins the **back** of the queue: `ahead = visible quantity at p` (marketable orders take liquidity instead) |
+| aggressive trade **at** *p* | consumes `ahead` first; the rest fills the order (partial fills allowed) |
+| aggressive trade **through** *p* | the level was swept: the order fills completely at *p* |
+| level decrease not explained by trades | cancellations, spread **pro-rata** over the volume ahead and behind; `ahead` never exceeds what is visible |
+| `book_gap` / `book_snapshot` | levels unknown until the next snapshot; then `ahead` is clamped to the new level |
+| time in force elapsed | the unfilled remainder expires |
+
+`--model touch` is the naive baseline: an order fills completely the first time an opposite trade
+touches its price. A property test checks that the queue model never fills more, or sooner, than
+`touch` on random streams.
+
+The report gives fill rate, filled-quantity ratio, median time to first fill and **markouts** (mid
+1 s / 10 s / 60 s after the fill vs the fill price, in bps, positive = favourable): the gap between
+the two models is the adverse selection the naive model hides.
+
+```bash
+market-condition-simulator queue-fill --book book.jsonl --orders limit_orders.jsonl \
+  --symbol BTCUSDT --model queue --latency-ms 50 --output fills.jsonl --report report.json
+```
+
+Limit orders (JSONL): `order_id`, `side`, `price`, `quantity`, `submitted_at`, optional
+`time_in_force_seconds`. Fills are compatible with `event-driven-backtester run --executions`.
+Measured results on recorded BTCUSDT data are in the quant-terminal-web PR (`l2_fill_study.py`).
+
+---
+
 ## Requirements
 
 - Python **3.11+**
