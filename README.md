@@ -156,7 +156,16 @@ market-condition-simulator queue-fill --book book.jsonl --orders limit_orders.js
 
 Limit orders (JSONL): `order_id`, `side`, `price`, `quantity`, `submitted_at`, optional
 `time_in_force_seconds`. Fills are compatible with `event-driven-backtester run --executions`.
-Measured results on recorded BTCUSDT data are in the quant-terminal-web PR (`l2_fill_study.py`).
+Measured on 90 minutes of recorded BTCUSDT L2 data (2026-11-17/18, 53,975 diffs, 170,672 trades;
+quant-terminal-web `scripts/l2_fill_study.py`), 358 passive orders at the touch, 0.001 BTC, 60 s
+time in force, 50 ms latency:
+
+| Model | Fill rate | Median time to first fill | Markout 60 s |
+|---|---|---|---|
+| `touch` | 91.6 % | 0.71 s | −0.59 bps |
+| `queue` | 79.3 % | 3.91 s | −1.58 bps |
+
+A simulation on recorded data, not live results.
 
 ---
 
